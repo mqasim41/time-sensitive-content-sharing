@@ -1,23 +1,26 @@
+from flask_socketio import SocketIO, emit, join_room, leave_room, send
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 from itsdangerous import URLSafeTimedSerializer
 from flask_mail import Mail, Message
 from config.configuration import SECRET_KEY, EMAIL, EMAIL_PASSWORD
 import random
 import string
-import os
+import hashlib
+import eventlet
 
 app = Flask(__name__)
 
 app.secret_key = SECRET_KEY
+socketio = SocketIO(app)
 
 # Configuration for Flask-Mail
 app.config.update(
-    MAIL_SERVER='smtp.gmail.com',       # Replace with your SMTP server
-    MAIL_PORT=587,                      # Replace with your SMTP port
+    MAIL_SERVER='smtp.gmail.com',
+    MAIL_PORT=587,
     MAIL_USE_TLS=True,
-    MAIL_USERNAME=EMAIL,   # Replace with your email
-    MAIL_PASSWORD=EMAIL_PASSWORD,    # Replace with your email password or app-specific password
-    MAIL_DEFAULT_SENDER=EMAIL  # Replace with your email
+    MAIL_USERNAME=EMAIL,
+    MAIL_PASSWORD=EMAIL_PASSWORD,
+    MAIL_DEFAULT_SENDER=EMAIL
 )
 
 mail = Mail(app)
@@ -31,6 +34,21 @@ OTP_STORE = {}
 def generate_otp(length=6):
     """Generate a random OTP consisting of digits."""
     return ''.join(random.choices(string.digits, k=length))
+
+def create_sha256_hash(message):
+    """Create a SHA-256 hash for a given message."""
+    # Ensure the message is in bytes
+    message_bytes = message.encode('utf-8')
+    # Create the hash object
+    hash_object = hashlib.sha256(message_bytes)
+    # Get the hexadecimal representation of the hash
+    hash_hex = hash_object.hexdigest()
+    return hash_hex
+
+@socketio.on('message')
+def handle_message(json):
+    send({"data": json["data"], "sender": request.sid}, broadcast=True)
+
 
 @app.route('/')
 def home():
@@ -55,6 +73,8 @@ def generate_url():
     otp = generate_otp()
     OTP_STORE[identifier] = otp
 
+    hashed_message = create_sha256_hash(data)
+
     # Create a time-limited URL
     secure_url = serializer.dumps(identifier)
 
@@ -66,7 +86,7 @@ def generate_url():
         msg = Message(
             subject="Your OTP for Secure Data Access",
             recipients=[email],
-            body=f"Your OTP is: {otp}\nUse the following link to access your data: {access_url}"
+            body=f"Your OTP is: {otp}\nThe message hash is: {hashed_message}\nThe data access link has been dmed to you."
         )
         mail.send(msg)
     except Exception as e:
@@ -78,15 +98,16 @@ def generate_url():
         return redirect(url_for('home'))
 
     flash("Secure URL generated and OTP sent to your email.", "success")
-    return redirect(url_for('home'))
+    return render_template('home.html', access_url=access_url)
 
 @app.route('/access/<secure_url>', methods=['GET', 'POST'])
 def access_data_form(secure_url):
     """Render the form to input OTP and access the secured data."""
     if request.method == 'POST':
         otp = request.form.get('otp')
+        hash = request.form.get('hash')
         if not otp:
-            flash("OTP is required.", "danger")
+            flash("OTP and Hash is required.", "danger")
             return redirect(url_for('access_data_form', secure_url=secure_url))
         
         try:
@@ -108,7 +129,13 @@ def access_data_form(secure_url):
             flash("Data already accessed or invalid.", "danger")
             return redirect(url_for('home'))
         
-        flash("Data retrieved successfully.", "success")
+        hashed_data = create_sha256_hash(data)
+
+        if hashed_data != hash:
+            flash("Integrity Failure. Message has been altered", "danger")
+            return redirect(url_for('home'))
+        
+        flash("Data retrieved successfully. Both the hashes match.", "success")
         return render_template('data.html', data=data)
     
     return render_template('access.html', secure_url=secure_url)
@@ -116,4 +143,5 @@ def access_data_form(secure_url):
 if __name__ == '__main__':
     # Ensure that templates are auto-reloaded
     app.config['TEMPLATES_AUTO_RELOAD'] = True
-    app.run(debug=True)
+    eventlet.wsgi.server(eventlet.listen(('127.0.0.1', 5000)), app)
+

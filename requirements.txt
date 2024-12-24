@@ -2,3 +2,5 @@ Flask
 python-dotenv
 Flask-Mail
 itsdangerous
+flask-socketio
+eventlet
