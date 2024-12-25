@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html>
-
 <head>
   <title>Access Secured Data</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" />
@@ -10,24 +9,29 @@
   <div class="container mt-5">
     <h2>Access Secured Data</h2>
     <hr />
-    {% with messages = get_flashed_messages(with_categories=true) %} {% if
-    messages %} {% for category, message in messages %}
-    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-      {{ message }}
-      <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-        <span aria-hidden="true">&times;</span>
-      </button>
-    </div>
-    {% endfor %} {% endif %} {% endwith %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <!-- Access Form: OTP + Hash -->
     <form method="POST" action="{{ url_for('access_data_form', secure_url=secure_url) }}">
+      <!-- CSRF token + hidden fields if using Flask-WTF -->
+      {{ form.hidden_tag() }}
+
       <div class="form-group">
         <label for="otp">Enter OTP:</label>
-        <input type="text" class="form-control" id="otp" name="otp" placeholder="Enter the OTP sent to your email"
-          required />
-        <label for="hash">Enter Message Hash:</label>
-        <input type="text" class="form-control" id="hash" name="hash"
-          placeholder="Enter the Message Hash sent to your email" required />
+        {{ form.otp(class="form-control", id="otp", placeholder="Enter the OTP sent to your email") }}
       </div>
+
       <button type="submit" class="btn btn-success">Retrieve Data</button>
     </form>
   </div>
@@ -36,5 +40,4 @@
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
-
 </html>

@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html>
-
 <head>
   <title>Generate Secure URL</title>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" />
@@ -14,7 +13,10 @@
         <h4>Sidebar</h4>
         <ul class="list-group list-unstyled">
           <li>
-            <button class="list-group-item text-center bg-dark text-white w-100" onclick="showComponent('secureUrl')">
+            <button
+              class="list-group-item text-center bg-dark text-white w-100"
+              onclick="showComponent('secureUrl')"
+            >
               Confidential Chat
             </button>
           </li>
@@ -23,7 +25,10 @@
         <h6 class="mt-5">Normal Chats</h6>
         <ul class="list-group list-unstyled">
           <li>
-            <button class="list-group-item text-center bg-dark text-white" onclick="showComponent('chatInterface')">
+            <button
+              class="list-group-item text-center bg-dark text-white"
+              onclick="showComponent('chatInterface')"
+            >
               Receiver
             </button>
           </li>
@@ -33,47 +38,66 @@
 
     <!-- Main Content -->
     <div class="col-md-8">
+      <!-- Secure URL Generation Component -->
       <div id="secureUrl" class="component">
         <h2>Generate Secure URL</h2>
         <hr />
-        {% with messages = get_flashed_messages(with_categories=true) %} {% if
-        messages %} {% for category, message in messages %}
-        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-          {{ message }}
-          <button type="button" class="close" data-dismiss="alert" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-          </button>
-        </div>
-        {% endfor %} {% endif %} {% endwith %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                  <span aria-hidden="true">&times;</span>
+                </button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <!-- Use the Flask-WTF form -->
         <form method="POST" action="{{ url_for('generate_url') }}">
+          <!-- CSRF token + hidden fields -->
+          {{ form.hidden_tag() }}
+
           <div class="form-group">
             <label for="data">Data to Secure:</label>
-            <textarea class="form-control" id="data" name="data" rows="3" required></textarea>
+            <!-- Updated textarea with larger size -->
+            {{ form.data(class="form-control", id="data", rows="8", placeholder="Enter your sensitive data...") }}
           </div>
+
           <div class="form-group">
             <label for="email">Your Email:</label>
-            <input type="email" class="form-control" id="email" name="email" placeholder="example@example.com"
-              required />
+            {{ form.email(class="form-control", id="email", placeholder="example@example.com") }}
           </div>
+
           <button type="submit" class="btn btn-primary">
             Generate Secure URL
           </button>
         </form>
+
         {% if access_url %}
         <div class="alert alert-info mt-3">
-          <strong>Access URL:</strong>
-          <p>{{ access_url }}</p>
+          <strong>Access URL:</strong><br>
+          <a href="{{ access_url }}" target="_blank" class="text-primary">{{ access_url }}</a>
         </div>
         {% endif %}
       </div>
 
+      <!-- Chat Interface Component -->
       <div id="chatInterface" class="component d-none">
-        <h2>Chat with Reciever</h2>
+        <h2>Chat with Receiver</h2>
         <hr />
         <div class="chat-box bg-light p-3 border rounded" id="chat-box">
-          <!-- <p><strong>Receiver:</strong> Hi there! How can I help you?</p> -->
+          <!-- Chat messages get appended here -->
           <div class="form-group mt-3">
-            <input type="text" class="form-control" id="message-input" placeholder="Type your message..." />
+            <textarea
+              class="form-control"
+              id="message-input"
+              placeholder="Type your message..."
+              rows="3"
+              style="resize: none;"
+            ></textarea>
             <button class="btn btn-primary mt-2" onclick="sendMessage()">Send</button>
           </div>
         </div>
@@ -85,26 +109,22 @@
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
 
+  <!-- Socket.IO -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"
     integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
     crossorigin="anonymous"></script>
 
-  <!-- JavaScript for toggling components -->
-  <script type="text/javascript" charset="utf-8">
+  <!-- JavaScript for toggling components and chat -->
+  <script type="text/javascript">
     var socket = io();
 
     function sendMessage() {
       const messageInput = document.getElementById("message-input");
       const message = messageInput.value.trim();
 
-      console.log(socket.id, message);
       if (message) {
         socket.emit("message", { data: message });
-
-        // Optionally append the message to the sender's chat box
         appendMessage("You", message);
-
-        // Clear the input
         messageInput.value = "";
       }
     }
@@ -114,18 +134,16 @@
       document.querySelectorAll(".component").forEach((el) => {
         el.classList.add("d-none");
       });
-
-      // Show the selected component
+      // Show selected component
       document.getElementById(componentId).classList.remove("d-none");
     }
 
-    // Append a message to the chat box
     function appendMessage(sender, message) {
       const chatBox = document.getElementById("chat-box");
       const messageElement = document.createElement("p");
       messageElement.innerHTML = `<strong>${sender}:</strong> ${message}`;
       chatBox.appendChild(messageElement);
-      chatBox.scrollTop = chatBox.scrollHeight; // Scroll to the bottom
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     // Listen for incoming messages
@@ -134,8 +152,6 @@
         appendMessage("Sender", data.data);
       }
     });
-
   </script>
 </body>
-
 </html>

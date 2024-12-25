@@ -1,19 +1,48 @@
-from flask_socketio import SocketIO, emit, join_room, leave_room, send
-from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
-from itsdangerous import URLSafeTimedSerializer
-from flask_mail import Mail, Message
-from config.configuration import SECRET_KEY, EMAIL, EMAIL_PASSWORD
-import random
+import os
+import secrets
 import string
-import hashlib
 import eventlet
+import ssl
 
+from flask import (
+    Flask, request, jsonify, render_template,
+    redirect, url_for, flash, session
+)
+from flask_socketio import SocketIO, send
+from flask_mail import Mail, Message
+from itsdangerous import URLSafeTimedSerializer
+from utils.utils import generate_otp, create_sha256_hash, encrypt_data, decrypt_data
+
+# Flask-WTF / CSRF
+from flask_wtf import CSRFProtect, FlaskForm
+from wtforms import StringField, SubmitField
+from wtforms.validators import DataRequired, Email
+
+from config.configuration import (
+    FLASK_SECRET_KEY,
+    SERIALIZER_SECRET_KEY,
+    EMAIL,
+    EMAIL_PASSWORD,
+)
+
+# -------------------------
+# Flask App Initialization
+# -------------------------
 app = Flask(__name__)
 
-app.secret_key = SECRET_KEY
+# Use separate secret key for session cookies
+app.secret_key = FLASK_SECRET_KEY
+
+# Enable CSRF
+app.config['WTF_CSRF_ENABLED'] = True
+app.config['WTF_CSRF_SECRET_KEY'] = FLASK_SECRET_KEY
+csrf = CSRFProtect(app)
+
 socketio = SocketIO(app)
 
-# Configuration for Flask-Mail
+# -------------------
+# Flask-Mail Config
+# -------------------
 app.config.update(
     MAIL_SERVER='smtp.gmail.com',
     MAIL_PORT=587,
@@ -22,126 +51,232 @@ app.config.update(
     MAIL_PASSWORD=EMAIL_PASSWORD,
     MAIL_DEFAULT_SENDER=EMAIL
 )
-
 mail = Mail(app)
 
-serializer = URLSafeTimedSerializer(SECRET_KEY)
+# --------------------------
+# Time-Limited URL Serializer
+# --------------------------
+serializer = URLSafeTimedSerializer(SERIALIZER_SECRET_KEY)
 
-# In-memory stores for data and OTPs
+# -----------------
+# In-memory Stores
+# -----------------
 DATA_STORE = {}
 OTP_STORE = {}
 
-def generate_otp(length=6):
-    """Generate a random OTP consisting of digits."""
-    return ''.join(random.choices(string.digits, k=length))
-
-def create_sha256_hash(message):
-    """Create a SHA-256 hash for a given message."""
-    # Ensure the message is in bytes
-    message_bytes = message.encode('utf-8')
-    # Create the hash object
-    hash_object = hashlib.sha256(message_bytes)
-    # Get the hexadecimal representation of the hash
-    hash_hex = hash_object.hexdigest()
-    return hash_hex
-
+# -------------
+# Socket Events
+# -------------
 @socketio.on('message')
 def handle_message(json):
     send({"data": json["data"], "sender": request.sid}, broadcast=True)
 
+# -----------------
+# Flask-WTF Forms
+# -----------------
+class GenerateForm(FlaskForm):
+    data = StringField('Data', validators=[DataRequired()])
+    email = StringField('Email', validators=[DataRequired(), Email()])
+    submit = SubmitField('Generate Secure URL')
 
+class AccessForm(FlaskForm):
+    otp = StringField('OTP', validators=[DataRequired()])
+    submit = SubmitField('Access Data')
+
+# -------
+# Routes
+# -------
 @app.route('/')
 def home():
     """Render the home page with the form to generate secure URL."""
-    return render_template('home.html')
+    form = GenerateForm()
+    return render_template('home.html', form=form)
 
 @app.route('/generate', methods=['POST'])
 def generate_url():
-    """Handle the form submission to generate a secure URL and send OTP via email."""
-    data = request.form.get('data')
-    email = request.form.get('email')
-
-    if not data or not email:
-        flash("Data and email are required.", "danger")
+    """
+    1. Encrypt data
+    2. Generate OTP
+    3. Store them
+    4. Send OTP by email
+    5. Return a time-limited URL
+    """
+    form = GenerateForm()
+    if not form.validate_on_submit():
+        flash("Invalid input. Please fill out all fields correctly.", "danger")
         return redirect(url_for('home'))
 
-    # Generate unique identifier for the data
-    identifier = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    DATA_STORE[identifier] = data
+    data = form.data.data
+    email = form.email.data
 
-    # Generate OTP
+    identifier = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+
+    encryption_key, encrypted_data = encrypt_data(data)
+    DATA_STORE[identifier] = encrypted_data
+
     otp = generate_otp()
-    OTP_STORE[identifier] = otp
 
-    hashed_message = create_sha256_hash(data)
+    data_hash = create_sha256_hash(data)
 
-    # Create a time-limited URL
-    secure_url = serializer.dumps(identifier)
+    OTP_STORE[identifier] = {
+        'otp': otp,
+        'key': encryption_key,
+        'hash': data_hash,
+        'attempts': 0
+    }
 
-    # Construct the access URL
-    access_url = url_for('access_data_form', secure_url=secure_url, _external=True)
+    # Create a time-limited URL (5 minutes) in 'access_data_form'
+    secure_url_token = serializer.dumps(identifier)
 
-    # Send OTP via email
+    access_url = url_for('access_data_form', secure_url=secure_url_token, _external=True)
+
     try:
         msg = Message(
             subject="Your OTP for Secure Data Access",
             recipients=[email],
-            body=f"Your OTP is: {otp}\nThe message hash is: {hashed_message}\nThe data access link has been dmed to you."
+            body=(
+                f"Your OTP is: {otp}\n\n"
+                "Use this OTP on the data access page. "
+                "Do not share this OTP with anyone."
+            )
         )
         mail.send(msg)
     except Exception as e:
-        print(e)
-        # Clean up in case of email failure
+        print(f"Email send error: {e}")
+        # Clean up
         DATA_STORE.pop(identifier, None)
         OTP_STORE.pop(identifier, None)
         flash("Failed to send email. Please check the email address and try again.", "danger")
         return redirect(url_for('home'))
 
-    flash("Secure URL generated and OTP sent to your email.", "success")
-    return render_template('home.html', access_url=access_url)
+    flash("Secure URL generated. An OTP has been sent to your email.", "success")
+    return render_template('home.html', access_url=access_url, form=form)
 
 @app.route('/access/<secure_url>', methods=['GET', 'POST'])
 def access_data_form(secure_url):
-    """Render the form to input OTP and access the secured data."""
+    """
+    Render a form to input OTP and retrieve the secured data (5-minute limit).
+    """
+    form = AccessForm()
     if request.method == 'POST':
-        otp = request.form.get('otp')
-        hash = request.form.get('hash')
-        if not otp:
-            flash("OTP and Hash is required.", "danger")
+        if not form.validate_on_submit():
+            flash("Invalid form submission.", "danger")
             return redirect(url_for('access_data_form', secure_url=secure_url))
-        
+
+        otp_entered = form.otp.data
+        if not otp_entered:
+            flash("OTP is required.", "danger")
+            return redirect(url_for('access_data_form', secure_url=secure_url))
+
+        # Decode URL or fail if expired
         try:
-            # Decode URL and check expiration (5-minute limit)
             identifier = serializer.loads(secure_url, max_age=300)
-        except Exception as e:
+        except Exception:
             flash("Invalid or expired URL.", "danger")
             return redirect(url_for('home'))
-        
-        # Verify OTP
-        if OTP_STORE.get(identifier) != otp:
+
+        record = OTP_STORE.get(identifier)
+        if not record:
+            flash("Data not found or already accessed.", "danger")
+            return redirect(url_for('home'))
+
+        # Rate-limiting logic
+        record['attempts'] += 1
+        if record['attempts'] > 3:
+            # Too many attempts; destroy data
+            DATA_STORE.pop(identifier, None)
+            OTP_STORE.pop(identifier, None)
+            flash("Too many invalid OTP attempts. Data destroyed.", "danger")
+            return redirect(url_for('home'))
+
+        if record['otp'] != otp_entered:
             flash("Invalid OTP.", "danger")
             return redirect(url_for('access_data_form', secure_url=secure_url))
-        
-        # Retrieve and return data
-        data = DATA_STORE.pop(identifier, None)
+
+        encrypted_data = DATA_STORE.pop(identifier, None)
+        encryption_key = record['key']
+        original_hash = record['hash']
+
+        # Remove from OTP_STORE to ensure one-time access
         OTP_STORE.pop(identifier, None)
-        if data is None:
-            flash("Data already accessed or invalid.", "danger")
-            return redirect(url_for('home'))
-        
-        hashed_data = create_sha256_hash(data)
 
-        if hashed_data != hash:
-            flash("Integrity Failure. Message has been altered", "danger")
+        if encrypted_data is None:
+            flash("Data already accessed or invalid identifier.", "danger")
             return redirect(url_for('home'))
-        
-        flash("Data retrieved successfully. Both the hashes match.", "success")
-        return render_template('data.html', data=data)
+
+        decrypted_data = decrypt_data(encryption_key, encrypted_data)
+        if not decrypted_data:
+            flash("Integrity check failed. The data may have been altered.", "danger")
+            return redirect(url_for('home'))
+
+        # Compare new hash
+        hashed_data = create_sha256_hash(decrypted_data)
+        if hashed_data != original_hash:
+            flash("Integrity check failed. The data may have been altered.", "danger")
+            return redirect(url_for('home'))
+
+        flash("Data retrieved successfully. Integrity verified.", "success")
+        return render_template('data.html', data=decrypted_data)
+
+    # If GET request, display the form
+    return render_template('access.html', secure_url=secure_url, form=form)
+
+@app.route('/test', methods=['GET'])
+def test():
+    """
+    Example route that corrupts data in the DATA_STORE for demonstration.
+    Disable or protect this in production.
+    """
+
+    if len(DATA_STORE) > 0:
+        for identifier in DATA_STORE:
+            DATA_STORE[identifier] = b"corrupted data"
+    return jsonify({"message": "Data in memory has been corrupted."})
+
+@app.route('/failure_test', methods=['GET'])
+def failure_test():
+    """
+    Example route that corrupts data in the DATA_STORE for demonstration.
+    Disable or protect this in production.
+    """
+    secret_data = {}
+
+    if len(DATA_STORE) > 0:
+        for identifier, value in DATA_STORE.items():
+            encrypted_data = DATA_STORE.get(identifier, None)
+            record = OTP_STORE.get(identifier)
+            if record and 'key' in record:  # Ensure record and 'key' exist
+                encryption_key = record['key']
+                decrypted_data = decrypt_data(encryption_key, encrypted_data)
+                secret_data[identifier] = decrypted_data
+            else:
+                secret_data[identifier] = None  # Handle missing key gracefully
     
-    return render_template('access.html', secure_url=secure_url)
+    return jsonify({"message": secret_data})
 
+
+# -------------
+# Main Entrypoint
+# -------------
 if __name__ == '__main__':
-    # Ensure that templates are auto-reloaded
+    # Enable template auto-reloading for local development
     app.config['TEMPLATES_AUTO_RELOAD'] = True
-    eventlet.wsgi.server(eventlet.listen(('127.0.0.1', 5000)), app)
 
+    # Optional: Run over HTTPS using a self-signed cert
+    cert_file = 'cert.pem'
+    key_file = 'key.pem'
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+
+        listener = eventlet.listen(('127.0.0.1', 5000))
+        ssl_listener = eventlet.wrap_ssl(
+            listener, 
+            server_side=True, 
+            certfile=cert_file, 
+            keyfile=key_file
+        )
+        eventlet.wsgi.server(ssl_listener, app)
+    else:
+        # Fallback: HTTP
+        app.run(host='127.0.0.1', port=5000, debug=True)
