@@ -19,7 +19,6 @@ from flask_wtf import CSRFProtect, FlaskForm
 from wtforms import StringField, SubmitField
 from wtforms.validators import DataRequired, Email
 
-# Import your config secrets
 from config.configuration import (
     FLASK_SECRET_KEY,
     SERIALIZER_SECRET_KEY,
@@ -134,24 +133,18 @@ def generate_url():
         flash("Invalid input. Please fill out all fields correctly.", "danger")
         return redirect(url_for('home'))
 
-    # Extract form data
     data = form.data.data
     email = form.email.data
 
-    # Generate unique identifier
     identifier = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
 
-    # Encrypt the data
     encryption_key, encrypted_data = encrypt_data(data)
     DATA_STORE[identifier] = encrypted_data
 
-    # Generate OTP
     otp = generate_otp()
 
-    # Compute hash of the original plaintext
     data_hash = create_sha256_hash(data)
 
-    # Store data in OTP_STORE
     OTP_STORE[identifier] = {
         'otp': otp,
         'key': encryption_key,
@@ -162,10 +155,8 @@ def generate_url():
     # Create a time-limited URL (5 minutes) in 'access_data_form'
     secure_url_token = serializer.dumps(identifier)
 
-    # Construct the access URL
     access_url = url_for('access_data_form', secure_url=secure_url_token, _external=True)
 
-    # Send OTP via email
     try:
         msg = Message(
             subject="Your OTP for Secure Data Access",
@@ -225,12 +216,10 @@ def access_data_form(secure_url):
             flash("Too many invalid OTP attempts. Data destroyed.", "danger")
             return redirect(url_for('home'))
 
-        # Verify OTP
         if record['otp'] != otp_entered:
             flash("Invalid OTP.", "danger")
             return redirect(url_for('access_data_form', secure_url=secure_url))
 
-        # Retrieve encrypted data and key
         encrypted_data = DATA_STORE.pop(identifier, None)
         encryption_key = record['key']
         original_hash = record['hash']
@@ -242,7 +231,6 @@ def access_data_form(secure_url):
             flash("Data already accessed or invalid identifier.", "danger")
             return redirect(url_for('home'))
 
-        # Decrypt data
         decrypted_data = decrypt_data(encryption_key, encrypted_data)
         if not decrypted_data:
             flash("Integrity check failed. The data may have been altered.", "danger")
