@@ -1,7 +1,6 @@
 import os
 import secrets
 import string
-import hashlib
 import eventlet
 import ssl
 
@@ -233,6 +232,28 @@ def test():
         for identifier in DATA_STORE:
             DATA_STORE[identifier] = b"corrupted data"
     return jsonify({"message": "Data in memory has been corrupted."})
+
+@app.route('/failure_test', methods=['GET'])
+def failure_test():
+    """
+    Example route that corrupts data in the DATA_STORE for demonstration.
+    Disable or protect this in production.
+    """
+    secret_data = {}
+
+    if len(DATA_STORE) > 0:
+        for identifier, value in DATA_STORE.items():
+            encrypted_data = DATA_STORE.get(identifier, None)
+            record = OTP_STORE.get(identifier)
+            if record and 'key' in record:  # Ensure record and 'key' exist
+                encryption_key = record['key']
+                decrypted_data = decrypt_data(encryption_key, encrypted_data)
+                secret_data[identifier] = decrypted_data
+            else:
+                secret_data[identifier] = None  # Handle missing key gracefully
+    
+    return jsonify({"message": secret_data})
+
 
 # -------------
 # Main Entrypoint
